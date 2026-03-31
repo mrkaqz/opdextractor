@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clinic OCR — Patient Record Extractor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<header>
+  <span>🏥</span>
+  <h1>Clinic OCR — Patient Record Extractor</h1>
+</header>
+
+<main>
+
+  <!-- Upload card -->
+  <div class="card">
+    <h2>Upload Handwritten Photos</h2>
+
+    <!-- API key + model -->
+    <div id="api-key-input">
+      <label for="apiKey">Gemini API Key:</label>
+      <input type="password" id="apiKey" placeholder="Paste your Google AI Studio API key…" autocomplete="off" />
+      <label for="modelSelect" style="margin-left:8px;">Model:</label>
+      <select id="modelSelect" style="padding:8px 12px;border:1.5px solid #b0c8e0;border-radius:6px;font-size:.9rem;background:#fff;cursor:pointer;min-width:320px;">
+        <option value="gemini-2.5-pro-preview-03-25">gemini-2.5-pro-preview-03-25</option>
+      </select>
+      <button class="btn btn-outline" id="btn-load-models" style="padding:8px 14px;">🔄 Load Models</button>
+    </div>
+
+    <!-- Drop zone -->
+    <div id="drop-zone">
+      <span class="icon">📷</span>
+      <p>Drag &amp; drop photos here, or <span id="browse-link">click to browse</span></p>
+      <p style="font-size:.8rem;margin-top:6px;color:#888;">Supports JPG, PNG, HEIC — multiple files at once</p>
+    </div>
+    <input type="file" id="file-input" accept="image/*" multiple style="display:none" />
+
+    <!-- Thumbnails -->
+    <div id="thumb-strip"></div>
+
+    <!-- Actions -->
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-process" disabled>
+        <span>⚡</span> Process Photos
+      </button>
+      <button class="btn btn-outline" id="btn-clear-files" disabled>
+        Clear
+      </button>
+    </div>
+
+    <!-- Progress bar -->
+    <div id="progress-wrap" style="display:none;margin-top:14px;">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:.85rem;color:#444;">
+        <span id="progress-label">Processing…</span>
+        <span id="progress-pct">0%</span>
+      </div>
+      <div style="background:#d0dce8;border-radius:6px;height:10px;overflow:hidden;">
+        <div id="progress-bar" style="height:100%;background:#2e75b6;width:0%;transition:width .3s;"></div>
+      </div>
+    </div>
+
+    <div id="status"></div>
+  </div>
+
+  <!-- Results card -->
+  <div class="card" id="results-section">
+    <div class="table-toolbar">
+      <h2>Extracted Records <span id="row-count"></span></h2>
+      <div class="btn-row" style="margin-top:0">
+        <button class="btn btn-outline" id="btn-add-row">+ Add Row</button>
+        <button class="btn btn-success" id="btn-download">
+          <span>⬇️</span> Download Excel
+        </button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table id="records-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>No.</th>
+            <th>Name</th>
+            <th>Pet</th>
+            <th>Type</th>
+            <th>OPD</th>
+            <th class="td-desc">Description</th>
+            <th>Price</th>
+            <th>Note</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const FIELDS = ["no","name","pet","type","opd","description","price","note"];
+let selectedFiles = [];
+let extractedRows = [];
+
+// ── DOM refs ──
+const dropZone    = document.getElementById("drop-zone");
+const fileInput   = document.getElementById("file-input");
+const browseLink  = document.getElementById("browse-link");
+const thumbStrip  = document.getElementById("thumb-strip");
+const btnProcess  = document.getElementById("btn-process");
+const btnClearFiles = document.getElementById("btn-clear-files");
+const statusEl    = document.getElementById("status");
+const resultsSection = document.getElementById("results-section");
+const tableBody   = document.getElementById("table-body");
+const rowCountEl  = document.getElementById("row-count");
+const btnAddRow   = document.getElementById("btn-add-row");
+const btnDownload = document.getElementById("btn-download");
+const apiKeyEl    = document.getElementById("apiKey");
+
+// Restore saved API key
+const modelSelectEl = document.getElementById("modelSelect");
+
+const savedKey = localStorage.getItem("gemini_api_key");
+if (savedKey) apiKeyEl.value = savedKey;
+apiKeyEl.addEventListener("change", () => localStorage.setItem("gemini_api_key", apiKeyEl.value));
+
+const savedModel = localStorage.getItem("gemini_model");
+modelSelectEl.addEventListener("change", () => localStorage.setItem("gemini_model", modelSelectEl.value));
+
+document.getElementById("btn-load-models").addEventListener("click", async () => {
+  const apiKey = apiKeyEl.value.trim();
+  if (!apiKey) { setStatus("Enter your API key first, then click Load Models.", "error"); return; }
+  const btn = document.getElementById("btn-load-models");
+  btn.disabled = true;
+  btn.textContent = "Loading…";
+  try {
+    const resp = await fetch("/api/models", { headers: { "X-Gemini-Key": apiKey } });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || resp.statusText);
+    }
+    const data = await resp.json();
+    modelSelectEl.innerHTML = "";
+    data.models.forEach(m => {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = m.display;
+      modelSelectEl.appendChild(opt);
+    });
+    // Restore saved model if still in the list, otherwise keep first
+    if (savedModel && [...modelSelectEl.options].some(o => o.value === savedModel)) {
+      modelSelectEl.value = savedModel;
+    }
+    setStatus(`✅ Loaded ${data.models.length} models — select one from the dropdown.`, "success");
+  } catch (e) {
+    setStatus("Failed to load models: " + e.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔄 Load Models";
+  }
+});
+
+// ── File handling ──
+browseLink.addEventListener("click", () => fileInput.click());
+dropZone.addEventListener("click", (e) => { if (e.target !== browseLink) fileInput.click(); });
+fileInput.addEventListener("change", () => addFiles(Array.from(fileInput.files)));
+
+dropZone.addEventListener("dragover",  (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+dropZone.addEventListener("dragleave", ()  => dropZone.classList.remove("drag-over"));
+dropZone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropZone.classList.remove("drag-over");
+  addFiles(Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/")));
+});
+
+function addFiles(files) {
+  files.forEach(f => {
+    if (!selectedFiles.find(x => x.name === f.name && x.size === f.size)) {
+      selectedFiles.push(f);
+    }
+  });
+  renderThumbs();
+  fileInput.value = "";
+}
+
+function renderThumbs() {
+  thumbStrip.innerHTML = "";
+  selectedFiles.forEach((f, i) => {
+    const div = document.createElement("div");
+    div.className = "thumb-item";
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(f);
+    img.onload = () => URL.revokeObjectURL(img.src);
+    const btn = document.createElement("button");
+    btn.className = "remove-btn";
+    btn.textContent = "✕";
+    btn.title = "Remove";
+    btn.onclick = () => { selectedFiles.splice(i, 1); renderThumbs(); };
+    div.appendChild(img);
+    div.appendChild(btn);
+    thumbStrip.appendChild(div);
+  });
+  btnProcess.disabled = selectedFiles.length === 0;
+  btnClearFiles.disabled = selectedFiles.length === 0;
+}
+
+btnClearFiles.addEventListener("click", () => {
+  selectedFiles = [];
+  renderThumbs();
+  setStatus("", "");
+});
+
+// ── Process (one image at a time to respect free-tier rate limits) ──
+const DELAY_MS = 4500; // ~13 req/min — safely under 15 RPM free tier limit
+
+function setProgress(done, total) {
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  document.getElementById("progress-bar").style.width = pct + "%";
+  document.getElementById("progress-pct").textContent = pct + "%";
+  document.getElementById("progress-label").textContent =
+    done < total ? `Processing image ${done + 1} of ${total}…` : `Done — ${total} image(s) processed.`;
+}
+
+btnProcess.addEventListener("click", async () => {
+  const apiKey = apiKeyEl.value.trim();
+  if (!apiKey) { setStatus("Please enter your Gemini API key first.", "error"); return; }
+  if (selectedFiles.length === 0) { setStatus("Please add at least one photo.", "error"); return; }
+
+  btnProcess.disabled = true;
+  btnClearFiles.disabled = true;
+  btnProcess.innerHTML = '<span class="spinner"></span> Processing…';
+
+  const progressWrap = document.getElementById("progress-wrap");
+  progressWrap.style.display = "block";
+  setProgress(0, selectedFiles.length);
+  setStatus(`Starting — processing ${selectedFiles.length} photo(s) one at a time…`, "info");
+
+  extractedRows = [];
+  const errors = [];
+
+  for (let i = 0; i < selectedFiles.length; i++) {
+    setProgress(i, selectedFiles.length);
+
+    const formData = new FormData();
+    formData.append("files", selectedFiles[i]);
+
+    try {
+      const resp = await fetch("/api/process", {
+        method: "POST",
+        headers: { "X-Gemini-Key": apiKey, "X-Gemini-Model": modelSelectEl.value },
+        body: formData,
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new Error(err.detail || resp.statusText);
+      }
+
+      const data = await resp.json();
+      if (data.errors && data.errors.length > 0) {
+        errors.push(...data.errors);
+      }
+      extractedRows.push(...data.rows);
+
+      // Update table live as each image finishes
+      renderTable(extractedRows);
+      if (i === 0) {
+        resultsSection.style.display = "block";
+        resultsSection.scrollIntoView({ behavior: "smooth" });
+      }
+    } catch (e) {
+      errors.push(`${selectedFiles[i].name}: ${e.message}`);
+    }
+
+    // Delay between requests — skip after last image
+    if (i < selectedFiles.length - 1) {
+      await new Promise(r => setTimeout(r, DELAY_MS));
+    }
+  }
+
+  setProgress(selectedFiles.length, selectedFiles.length);
+
+  let msg = `✅ Extracted ${extractedRows.length} records from ${selectedFiles.length} photo(s).`;
+  if (errors.length > 0) {
+    msg += ` ⚠️ ${errors.length} error(s): ${errors.slice(0, 3).join("; ")}`;
+    setStatus(msg, "error");
+  } else {
+    setStatus(msg, "success");
+  }
+
+  btnProcess.disabled = false;
+  btnClearFiles.disabled = false;
+  btnProcess.innerHTML = "<span>⚡</span> Process Photos";
+});
+
+// ── Table rendering ──
+function renderTable(rows) {
+  tableBody.innerHTML = "";
+  rows.forEach((row, i) => appendRow(row, i + 1));
+  rowCountEl.textContent = `(${rows.length} rows)`;
+}
+
+function appendRow(row, displayIdx) {
+  const tr = document.createElement("tr");
+  tr.dataset.idx = displayIdx - 1;
+
+  // Sequential # (non-editable)
+  const tdIdx = document.createElement("td");
+  tdIdx.className = "td-no";
+  tdIdx.textContent = displayIdx;
+  tr.appendChild(tdIdx);
+
+  // Editable fields
+  FIELDS.forEach(key => {
+    const td = document.createElement("td");
+    td.contentEditable = "true";
+    td.textContent = row[key] ?? "";
+    if (key === "price") td.className = "td-price";
+    if (key === "description") td.className = "td-desc";
+    td.dataset.key = key;
+    td.addEventListener("input", () => syncRowFromDOM(tr));
+    tr.appendChild(td);
+  });
+
+  // Delete button
+  const tdDel = document.createElement("td");
+  tdDel.className = "td-del";
+  const delBtn = document.createElement("button");
+  delBtn.textContent = "🗑";
+  delBtn.title = "Delete row";
+  delBtn.onclick = () => { tr.remove(); reindexTable(); };
+  tdDel.appendChild(delBtn);
+  tr.appendChild(tdDel);
+
+  tableBody.appendChild(tr);
+}
+
+function reindexTable() {
+  Array.from(tableBody.rows).forEach((tr, i) => {
+    tr.cells[0].textContent = i + 1;
+    tr.dataset.idx = i;
+  });
+  rowCountEl.textContent = `(${tableBody.rows.length} rows)`;
+}
+
+function syncRowFromDOM(tr) {
+  // Keep extractedRows in sync (used by download)
+  const idx = parseInt(tr.dataset.idx);
+  if (isNaN(idx)) return;
+  const obj = {};
+  FIELDS.forEach((key, fi) => {
+    obj[key] = tr.cells[fi + 1].textContent.trim();
+  });
+  extractedRows[idx] = obj;
+}
+
+function getTableRows() {
+  return Array.from(tableBody.rows).map(tr => {
+    const obj = {};
+    FIELDS.forEach((key, fi) => {
+      obj[key] = tr.cells[fi + 1].textContent.trim();
+    });
+    return obj;
+  });
+}
+
+// ── Add row ──
+btnAddRow.addEventListener("click", () => {
+  const empty = { no: "", name: "", pet: "", type: "", opd: "", description: "", price: "", note: "" };
+  extractedRows.push(empty);
+  appendRow(empty, tableBody.rows.length + 1);
+  rowCountEl.textContent = `(${tableBody.rows.length} rows)`;
+});
+
+// ── Download ──
+btnDownload.addEventListener("click", async () => {
+  const rows = getTableRows();
+  if (rows.length === 0) { setStatus("No rows to export.", "error"); return; }
+
+  btnDownload.disabled = true;
+  btnDownload.innerHTML = '<span class="spinner" style="border-top-color:#fff"></span> Exporting…';
+
+  try {
+    const resp = await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || resp.statusText);
+    }
+    const blob = await resp.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url;
+    a.download = "clinic_records.xlsx";
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus("✅ Excel file downloaded.", "success");
+  } catch (e) {
+    setStatus("Export error: " + e.message, "error");
+  } finally {
+    btnDownload.disabled = false;
+    btnDownload.innerHTML = "<span>⬇️</span> Download Excel";
+  }
+});
+
+// ── Status helper ──
+function setStatus(msg, type) {
+  statusEl.textContent = msg;
+  statusEl.className = type;
+  statusEl.style.display = msg ? "block" : "none";
+}
+</script>
+</body>
+</html>
