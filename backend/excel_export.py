@@ -3,8 +3,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-HEADERS = ["No.", "Name", "Pet", "Type", "OPD", "Description", "Price", "Note"]
-KEYS    = ["no",  "name", "pet", "type", "opd", "description", "price", "note"]
+HEADERS = ["Date", "No.", "Name", "Pet", "Type", "OPD", "Description", "Price", "Note"]
+KEYS    = ["date", "no",  "name", "pet", "type", "opd", "description", "price", "note"]
 
 HEADER_FONT  = Font(name="Arial", bold=True, size=11, color="FFFFFF")
 HEADER_FILL  = PatternFill("solid", fgColor="2E75B6")
@@ -17,14 +17,15 @@ _thin = Side(style="thin", color="B0B0B0")
 BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
 
 COL_WIDTHS = {
-    1: 6,   # No.
-    2: 18,  # Name
-    3: 14,  # Pet
-    4: 10,  # Type
-    5: 10,  # OPD
-    6: 45,  # Description
-    7: 10,  # Price
-    8: 20,  # Note
+    1: 14,  # Date
+    2: 6,   # No.
+    3: 18,  # Name
+    4: 14,  # Pet
+    5: 10,  # Type
+    6: 10,  # OPD
+    7: 45,  # Description
+    8: 10,  # Price
+    9: 20,  # Note
 }
 
 
@@ -77,9 +78,8 @@ def build_excel(rows: list[dict]) -> bytes:
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
     # Price column: number format
-    price_col = get_column_letter(KEYS.index("price") + 1)
-    for row in ws.iter_rows(min_row=2, min_col=KEYS.index("price") + 1,
-                             max_col=KEYS.index("price") + 1):
+    price_col_idx = KEYS.index("price") + 1
+    for row in ws.iter_rows(min_row=2, min_col=price_col_idx, max_col=price_col_idx):
         for cell in row:
             if isinstance(cell.value, float):
                 cell.number_format = "#,##0.00"

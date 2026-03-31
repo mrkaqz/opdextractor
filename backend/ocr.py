@@ -9,7 +9,12 @@ from google.genai import types
 
 PROMPT = """You are extracting every patient record from a page of a handwritten Thai/English veterinary clinic logbook.
 
-COLUMN ORDER (left to right on the page):
+FIELD ORDER (each row must have all these fields):
+0. date      — the date header written above this row (e.g. "14 ม.ค. 2569", "12 ม.ค. 2569").
+               IMPORTANT: a single page can have MULTIPLE date headers at different vertical positions.
+               Each row inherits the date of the nearest header written above it on the page.
+               If a new date header appears mid-page, all rows below it get that new date.
+               Preserve the date exactly as handwritten. If no date header is visible above a row, use "".
 1. no        — far-left, the row/patient number
 2. name      — owner's name, usually Thai script
 3. pet       — pet's name, Thai or English
@@ -26,14 +31,15 @@ RULES:
 - Preserve Thai text exactly as handwritten. Do not transliterate or translate.
 - If a row has 1-2 indented continuation lines below it, those lines belong to that patient's description — append them with a space.
 - Ignore crossed-out or struck-through text.
-- Ignore the page header row (column labels), date headers, and grand-total lines at the bottom.
+- Ignore the page header row (column labels) and grand-total lines at the bottom.
+- Date header lines are NOT patient rows — extract them only as the "date" field of subsequent rows.
 - If a field is truly illegible, use "".
 
-OUTPUT FORMAT (example):
+OUTPUT FORMAT (example with two dates on one page):
 [
-  {"no":"1","name":"สมชาย ใจดี","pet":"มิ้ว","type":"Ct","opd":"1234","description":"ตรวจ + วัคซีน Raboon (1 dose) ยาถ่าย","price":"350","note":""},
-  {"no":"2","name":"วันดี","pet":"โกลเด้น","type":"Dg","opd":"5678","description":"FLU วัคซีน (2.5 kg) + RXC ยาแก้อักเสบ","price":"480","note":""},
-  {"no":"3","name":"John","pet":"Buddy","type":"Dog","opd":"9012","description":"Vaccination FLU + Bordetella","price":"200","note":""}
+  {"date":"12 ม.ค. 2569","no":"1","name":"สมชาย ใจดี","pet":"มิ้ว","type":"Ct","opd":"1234","description":"ตรวจ + วัคซีน Raboon (1 dose) ยาถ่าย","price":"350","note":""},
+  {"date":"12 ม.ค. 2569","no":"2","name":"วันดี","pet":"โกลเด้น","type":"Dg","opd":"5678","description":"FLU วัคซีน (2.5 kg) + RXC ยาแก้อักเสบ","price":"480","note":""},
+  {"date":"13 ม.ค. 2569","no":"1","name":"John","pet":"Buddy","type":"Dog","opd":"9012","description":"Vaccination FLU + Bordetella","price":"200","note":""}
 ]"""
 
 
@@ -135,7 +141,7 @@ def extract_rows(image_bytes: bytes, api_key: str = "", model: str = "gemini-2.5
 
     rows = _parse_json(response.text)
 
-    keys = ["no", "name", "pet", "type", "opd", "description", "price", "note"]
+    keys = ["date", "no", "name", "pet", "type", "opd", "description", "price", "note"]
     clean = []
     for row in rows:
         if not isinstance(row, dict):
