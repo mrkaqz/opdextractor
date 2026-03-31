@@ -1,6 +1,6 @@
 services:
   opdextractor:
-    build: .
+    image: ghcr.io/mrkaqz/opdextractor:latest
     ports:
       - "8000:8000"
     restart: unless-stopped
